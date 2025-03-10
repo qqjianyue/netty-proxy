@@ -6,12 +6,15 @@ import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class RouterClientHandler extends ChannelInboundHandlerAdapter {
 
     private final String host;
     private final int port;
     private Channel outboundChannel;
+    private static final Logger logger = LoggerFactory.getLogger(RouterClientHandler.class);
 
     public RouterClientHandler(String host, int port) {
         this.host = host;
@@ -57,7 +60,7 @@ public class RouterClientHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        cause.printStackTrace();
+        logger.error("Exception caught", cause);
         closeOnFlush(ctx.channel());
     }
 
