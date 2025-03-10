@@ -1,0 +1,32 @@
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+*.class
+*.log
+*.bak
+*.tmp
+*.swp
+*.swx
+*.swo
+*.DS_Store
+*.jar
+*.war
+*.ear
+*.rar
+*.zip
+*.tar.gz
+*.7z
