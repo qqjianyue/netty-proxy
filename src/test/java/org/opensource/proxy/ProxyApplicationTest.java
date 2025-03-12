@@ -62,6 +62,11 @@ public class ProxyApplicationTest {
         }
     }
 
+    @Test
+    public void testProxyAPI(){
+
+    }
+
     @AfterClass
     public static void teardown() {
         // Gracefully shutdown servers
