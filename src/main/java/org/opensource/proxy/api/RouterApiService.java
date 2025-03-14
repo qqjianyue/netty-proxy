@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -45,7 +46,7 @@ public class RouterApiService {
                     content = { @Content(mediaType = "text/plain", schema = @Schema(implementation = String.class)) })
     })
     @PostMapping("/add")
-    public ResponseEntity<String> addRoutingRule(@Parameter(description = "Routing rule details in CSV format: routingName,enterPort,routingDestination,routingPort,description") @RequestBody String body) {
+    public ResponseEntity<String> addRoutingRule(@Parameter(description = "Routing rule details in CSV format: routingName,enterPort,routingDestination,routingPort,description", example = "exampleRuleName,18888,example.domain.name,8888") @RequestBody String body) {
         String[] parts = body.split(",");
         if (parts.length != 5) {
             return new ResponseEntity<>("Bad request", HttpStatus.BAD_REQUEST);
@@ -75,7 +76,7 @@ public class RouterApiService {
                     content = { @Content(mediaType = "text/plain", schema = @Schema(implementation = String.class)) })
     })
     @DeleteMapping("/delete")
-    public ResponseEntity<String> deleteRoutingRule(@Parameter(description = "Routing name to delete") @RequestBody String body) throws Exception {
+    public ResponseEntity<String> deleteRoutingRule(@Parameter(description = "Routing name to delete", example = "ruleNameToBeDeleted") @RequestBody String body) throws Exception {
         String routingName = body.trim();
 
         RouterConfig config = repository.read(routingName);
