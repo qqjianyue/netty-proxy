@@ -4,9 +4,16 @@ import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
+import org.opensource.proxy.config.ApplicationConfig;
 import org.opensource.proxy.config.RouterConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Repository;
+import org.springframework.util.Assert;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -14,25 +21,26 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class CSVRouterConfigRepository implements RouterConfigRepository {
+@Repository
+public class CSVRouterConfigRepository implements RouterConfigRepository, InitializingBean {
+    @Autowired
+    ApplicationConfig applicationConfig;
 
-    private final String filePath;
     private final Set<RouterConfig> cacheSet = ConcurrentHashMap.newKeySet();
 
     private static final Logger logger = LoggerFactory.getLogger(CSVRouterConfigRepository.class);
 
-    public CSVRouterConfigRepository(String filePath) {
-        this.filePath = filePath;
+    @Override
+    public void afterPropertiesSet() throws Exception {
         cacheSet.addAll(findAll());
     }
-    
 
     @Override
     public void create(RouterConfig config) {
         if (cacheSet.contains(config)) {
             throw new IllegalArgumentException("The combination of enter port, routing destination, and routing port must be unique.");
         }
-        try (CSVPrinter printer = new CSVPrinter(new FileWriter(filePath, true), CSVFormat.DEFAULT.withHeader("RoutingName", "EnterPort", "RoutingDestination", "RoutingPort", "Description"))) {
+        try (CSVPrinter printer = new CSVPrinter(new FileWriter(applicationConfig.getFilePath(), true), CSVFormat.DEFAULT.withHeader("RoutingName", "EnterPort", "RoutingDestination", "RoutingPort", "Description"))) {
             printer.printRecord(config.getRoutingName(), config.getEnterPort(), config.getRoutingDestination(), config.getRoutingPort(), config.getDescription());
             cacheSet.add(config);
         } catch (IOException e) {
@@ -42,7 +50,7 @@ public class CSVRouterConfigRepository implements RouterConfigRepository {
 
     @Override
     public RouterConfig read(String routingName) {
-        try (CSVParser parser = new CSVParser(new FileReader(filePath), CSVFormat.DEFAULT.withFirstRecordAsHeader())) {
+        try (CSVParser parser = new CSVParser(new FileReader(applicationConfig.getFilePath()), CSVFormat.DEFAULT.withFirstRecordAsHeader())) {
             for (CSVRecord record : parser) {
                 if (record.get("RoutingName").equals(routingName)) {
                     return new RouterConfig(
@@ -87,9 +95,9 @@ public class CSVRouterConfigRepository implements RouterConfigRepository {
     @Override
     public List<RouterConfig> findAll() {
         if( !cacheSet.isEmpty() )
-            return List.copyOf(cacheSet);
+            return new ArrayList<>(cacheSet);
         List<RouterConfig> configs = new ArrayList<>();
-        try (CSVParser parser = new CSVParser(new FileReader(filePath), CSVFormat.DEFAULT.withFirstRecordAsHeader())) {
+        try (CSVParser parser = new CSVParser(new FileReader(applicationConfig.getFilePath()), CSVFormat.DEFAULT.withFirstRecordAsHeader())) {
             for (CSVRecord record : parser) {
                 configs.add(new RouterConfig(
                         record.get("RoutingName"),
@@ -106,7 +114,7 @@ public class CSVRouterConfigRepository implements RouterConfigRepository {
     }
 
     private void saveAll(List<RouterConfig> configs) {
-        try (CSVPrinter printer = new CSVPrinter(new FileWriter(filePath), CSVFormat.DEFAULT.withHeader("RoutingName", "EnterPort", "RoutingDestination", "RoutingPort", "Description"))) {
+        try (CSVPrinter printer = new CSVPrinter(new FileWriter(applicationConfig.getFilePath()), CSVFormat.DEFAULT.withHeader("RoutingName", "EnterPort", "RoutingDestination", "RoutingPort", "Description"))) {
             for (RouterConfig config : configs) {
                 printer.printRecord(config.getRoutingName(), config.getEnterPort(), config.getRoutingDestination(), config.getRoutingPort(), config.getDescription());
             }
@@ -116,4 +124,5 @@ public class CSVRouterConfigRepository implements RouterConfigRepository {
             logger.error("Error saving all RouterConfigs to CSV file", e);
         }
     }
+
 }

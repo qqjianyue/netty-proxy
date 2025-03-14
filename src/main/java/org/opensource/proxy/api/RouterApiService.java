@@ -1,19 +1,22 @@
 package org.opensource.proxy.api;
 
 import com.google.gson.Gson;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.*;
-import io.netty.handler.logging.LogLevel;
-import io.netty.handler.logging.LoggingHandler;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVPrinter;
 import org.opensource.proxy.RouterServer;
 import org.opensource.proxy.config.RouterConfig;
 import org.opensource.proxy.repository.RouterConfigRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.*;
 
 import java.io.StringWriter;
 import java.io.Writer;
@@ -21,160 +24,116 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
+@Service
+@RestController
+@RequestMapping("/api")
 public class RouterApiService {
 
-    private final int port;
     private final RouterConfigRepository repository;
-    private final Map<RouterConfig, RouterServer> routerServerMap;
+    public final Map<RouterConfig, RouterServer> routerServerMap;
 
-    public RouterApiService(int port, RouterConfigRepository repository, Map<RouterConfig, RouterServer> routerServerMap) {
-        this.port = port;
+    @Autowired
+    public RouterApiService(RouterConfigRepository repository, Map<RouterConfig, RouterServer> routerServerMap) {
         this.repository = repository;
         this.routerServerMap = routerServerMap;
     }
 
-    public void start() throws Exception {
-        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-        EventLoopGroup workerGroup = new NioEventLoopGroup();
-        try {
-            ServerBootstrap b = new ServerBootstrap();
-            b.group(bossGroup, workerGroup)
-             .channel(NioServerSocketChannel.class)
-             .handler(new LoggingHandler(LogLevel.INFO))
-             .childHandler(new ChannelInitializer<SocketChannel>() {
-                 @Override
-                 public void initChannel(SocketChannel ch) {
-                     ChannelPipeline p = ch.pipeline();
-                     p.addLast(new HttpServerCodec());
-                     p.addLast(new HttpObjectAggregator(1048576));
-                     p.addLast(new ApiServiceHandler(repository, routerServerMap));
-                 }
-             });
-
-            Channel ch = b.bind(port).sync().channel();
-            System.out.println("API service started at port " + port);
-            ch.closeFuture().sync();
-        } finally {
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
+    @Operation(summary = "Add a new routing rule")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Routing rule added successfully",
+                    content = { @Content(mediaType = "text/plain", schema = @Schema(implementation = String.class)) }),
+            @ApiResponse(responseCode = "400", description = "Bad request",
+                    content = { @Content(mediaType = "text/plain", schema = @Schema(implementation = String.class)) })
+    })
+    @PostMapping("/add")
+    public ResponseEntity<String> addRoutingRule(@Parameter(description = "Routing rule details in CSV format: routingName,enterPort,routingDestination,routingPort,description") @RequestBody String body) {
+        String[] parts = body.split(",");
+        if (parts.length != 5) {
+            return new ResponseEntity<>("Bad request", HttpStatus.BAD_REQUEST);
         }
+
+        String routingName = parts[0].trim();
+        int enterPort = Integer.parseInt(parts[1].trim());
+        String routingDestination = parts[2].trim();
+        int routingPort = Integer.parseInt(parts[3].trim());
+        String description = parts[4].trim();
+
+        RouterConfig config = new RouterConfig(routingName, enterPort, routingDestination, routingPort, description);
+        repository.create(config);
+
+        RouterServer routerServer = new RouterServer(config.getEnterPort(), config.getRoutingDestination(), config.getRoutingPort());
+        routerServer.runDaemon();
+        routerServerMap.put(config, routerServer);
+
+        return new ResponseEntity<>("Routing rule added successfully", HttpStatus.OK);
     }
 
-    private static class ApiServiceHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
-        private final RouterConfigRepository repository;
-        private final Map<RouterConfig, RouterServer> routerServerMap;
+    @Operation(summary = "Delete a routing rule")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Routing rule deleted successfully",
+                    content = { @Content(mediaType = "text/plain", schema = @Schema(implementation = String.class)) }),
+            @ApiResponse(responseCode = "404", description = "Not found",
+                    content = { @Content(mediaType = "text/plain", schema = @Schema(implementation = String.class)) })
+    })
+    @DeleteMapping("/delete")
+    public ResponseEntity<String> deleteRoutingRule(@Parameter(description = "Routing name to delete") @RequestBody String body) throws Exception {
+        String routingName = body.trim();
 
-        public ApiServiceHandler(RouterConfigRepository repository, Map<RouterConfig, RouterServer> routerServerMap) {
-            this.repository = repository;
-            this.routerServerMap = routerServerMap;
+        RouterConfig config = repository.read(routingName);
+        if (config == null) {
+            return new ResponseEntity<>("Not found", HttpStatus.NOT_FOUND);
         }
 
-        @Override
-        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-            if (request.method() == HttpMethod.POST && request.uri().equals("/add")) {
-                handleAddRequest(ctx, request);
-            } else if (request.method() == HttpMethod.DELETE && request.uri().equals("/delete")) {
-                handleDeleteRequest(ctx, request);
-            } else if (request.method() == HttpMethod.GET && request.uri().equals("/list/json")) {
-                handleListJsonRequest(ctx);
-            } else if (request.method() == HttpMethod.GET && request.uri().equals("/list/csv")) {
-                handleListCsvRequest(ctx);
-            } else {
-                sendErrorResponse(ctx, HttpResponseStatus.NOT_FOUND);
-            }
+        repository.delete(routingName);
+        RouterServer routerServer = routerServerMap.remove(config);
+        if (routerServer != null) {
+            routerServer.shutdown();
         }
 
-        private void handleAddRequest(ChannelHandlerContext ctx, FullHttpRequest request) {
-            String body = request.content().toString(StandardCharsets.UTF_8);
-            String[] parts = body.split(",");
-            if (parts.length != 5) {
-                sendErrorResponse(ctx, HttpResponseStatus.BAD_REQUEST);
-                return;
-            }
+        return new ResponseEntity<>("Routing rule deleted successfully", HttpStatus.OK);
+    }
 
-            String routingName = parts[0].trim();
-            int enterPort = Integer.parseInt(parts[1].trim());
-            String routingDestination = parts[2].trim();
-            int routingPort = Integer.parseInt(parts[3].trim());
-            String description = parts[4].trim();
+    @Operation(summary = "List all routing rules in JSON format")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "List of routing rules",
+                    content = { @Content(mediaType = "application/json", schema = @Schema(implementation = RouterConfig.class)) })
+    })
+    @GetMapping("/list/json")
+    public ResponseEntity<String> listRoutingRulesJson() {
+        List<RouterConfig> configs = repository.findAll();
+        String json = new Gson().toJson(configs);
+        return new ResponseEntity<>(json, HttpStatus.OK);
+    }
 
-            RouterConfig config = new RouterConfig(routingName, enterPort, routingDestination, routingPort, description);
-            repository.create(config);
+    @Operation(summary = "List all routing rules in CSV format")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "List of routing rules",
+                    content = { @Content(mediaType = "text/csv", schema = @Schema(implementation = String.class)) }),
+            @ApiResponse(responseCode = "500", description = "Internal server error",
+                    content = { @Content(mediaType = "text/plain", schema = @Schema(implementation = String.class)) })
+    })
+    @GetMapping("/list/csv")
+    public ResponseEntity<String> listRoutingRulesCsv() {
+        List<RouterConfig> configs = repository.findAll();
 
-            RouterServer routerServer = new RouterServer(config.getEnterPort(), config.getRoutingDestination(), config.getRoutingPort());
-            routerServer.runDaemon();
-            routerServerMap.put(config, routerServer);
+        try (Writer writer = new StringWriter();
+             CSVPrinter csvPrinter = new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader("routingName", "enterPort", "routingDestination", "routingPort", "description"))) {
 
-            sendSuccessResponse(ctx, "Routing rule added successfully");
-        }
-
-        private void handleDeleteRequest(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-            String body = request.content().toString(StandardCharsets.UTF_8);
-            String routingName = body.trim();
-
-            RouterConfig config = repository.read(routingName);
-            if (config == null) {
-                sendErrorResponse(ctx, HttpResponseStatus.NOT_FOUND);
-                return;
-            }
-
-            repository.delete(routingName);
-            RouterServer routerServer = routerServerMap.remove(config);
-            if (routerServer != null) {
-                routerServer.shutdown();
-            }
-
-            sendSuccessResponse(ctx, "Routing rule deleted successfully");
-        }
-
-        private void handleListJsonRequest(ChannelHandlerContext ctx) {
-            List<RouterConfig> configs = repository.findAll();
-            String json = new Gson().toJson(configs);
-            FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, ctx.alloc().buffer().writeBytes(json.getBytes(StandardCharsets.UTF_8)));
-            response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
-            ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
-        }
-
-        private void handleListCsvRequest(ChannelHandlerContext ctx) {
-            List<RouterConfig> configs = repository.findAll();
-
-            try (Writer writer = new StringWriter();
-                 CSVPrinter csvPrinter = new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader("routingName", "enterPort", "routingDestination", "routingPort", "description"))) {
-
-                for (RouterConfig config : configs) {
-                    csvPrinter.printRecord(
-                            config.getRoutingName(),
-                            config.getEnterPort(),
-                            config.getRoutingDestination(),
-                            config.getRoutingPort(),
-                            config.getDescription()
-                    );
-                }
-
-                String csvContent = writer.toString();
-                FullHttpResponse response = new DefaultFullHttpResponse(
-                        HttpVersion.HTTP_1_1,
-                        HttpResponseStatus.OK,
-                        ctx.alloc().buffer().writeBytes(csvContent.getBytes(StandardCharsets.UTF_8))
+            for (RouterConfig config : configs) {
+                csvPrinter.printRecord(
+                        config.getRoutingName(),
+                        config.getEnterPort(),
+                        config.getRoutingDestination(),
+                        config.getRoutingPort(),
+                        config.getDescription()
                 );
-                response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/csv");
-                ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
-            } catch (Exception e) {
-                sendErrorResponse(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR);
             }
-        }
-
-        private void sendSuccessResponse(ChannelHandlerContext ctx, String message) {
-            FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, ctx.alloc().buffer());
-            response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain");
-            response.content().writeBytes(message.getBytes(StandardCharsets.UTF_8));
-            ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);;
-        }
-
-        private void sendErrorResponse(ChannelHandlerContext ctx, HttpResponseStatus status) {
-            FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, ctx.alloc().buffer());
-            response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain");
-            ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);;
+            // Ensure the CSVPrinter flushes the content
+            csvPrinter.flush();
+            String csvContent = writer.toString();
+            return new ResponseEntity<>(csvContent, HttpStatus.OK);
+        } catch (Exception e) {
+            return new ResponseEntity<>("Internal server error", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 }
